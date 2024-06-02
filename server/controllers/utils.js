@@ -1,6 +1,6 @@
 const speakeasy = require('speakeasy');
 const nodemailer = require('nodemailer');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const Sensors = require('../models/Sensor');
 require('dotenv').config();
 // Thông tin tài khoản email để gửi mã OTP
@@ -112,7 +112,8 @@ async function getStoredSensorData(stationsId, sensorsNames, limit = 22) {
 
 
 async function saveDataToDatabase(jsonData, check) {
-    const currentDateTime = moment().format('YYYY-MM-DD HH:mm:ss');
+    const currentDateTime = moment().tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss');
+    console.log('Current Time in Ho Chi Minh Timezone:', currentDateTime);
 
     try {
         const promises = jsonData.sensors.map(sensor => {

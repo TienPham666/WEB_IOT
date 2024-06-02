@@ -53,13 +53,20 @@ const authController = {
             if (existingUser) {
                 return res.status(400).json({ message: language === 'en' ? 'Username has existed!' : 'Tên người dùng đã tồn tại!' });
             }
+
+            // Kiểm tra xem username có chứa ít nhất một chữ cái không
+        const containsLetterUser = /[a-zA-Z]/.test(username);
+        if (!containsLetterUser) {
+            return res.status(400).json({ message: language === 'en' ? 'The username must contain letters!' : 'Tên người dùng phải chứa chữ cái!' });
+        }
+
             // Kiểm tra xem email đã tồn tại trong cơ sở dữ liệu chưa
             const existingEmail = await User.findOne({ where: { email } });
             if (existingEmail) {
                 return res.status(400).json({ message: language === 'en' ? 'Email already exists' : 'Email đã tồn tại' });
             }
             // Băm mật khẩu
-            const hashedPassword = await bcrypt.hash('123456', saltRounds);
+            const hashedPassword = await bcrypt.hash('user123456', saltRounds);
     
             // Thêm người dùng mới vào cơ sở dữ liệu
             const newUser = await User.create({ username, password: hashedPassword, name, email, roles: 'User' });
@@ -95,7 +102,7 @@ const authController = {
             }
             // Băm mật khẩu
             const hashedPassword = await bcrypt.hash(password, saltRounds);
-    
+
             // Thêm người dùng mới vào cơ sở dữ liệu
             const newUser = await User.create({ username, password: hashedPassword, name, email, roles: 'Viewer' });
             return res.status(200).json({ message: language === 'en' ? 'Register Successfully!' : 'Đăng ký thành công!' });

@@ -2,11 +2,10 @@ const express = require('express');
 const cors = require('cors'); 
 const mysql = require('mysql2');
 const { DateTime } = require('luxon');
-const moment1 = require('moment-timezone');
+const moment = require('moment-timezone');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const moment = require('moment');
 const mqtt = require('mqtt');
 const app = express();
 const port = 1104;
@@ -25,7 +24,6 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
     host: process.env.DB_HOST,
     dialect: 'mysql'
 });
-
 const brokerUrl = 'mqtt://mqttserver.tk';
 const brokerPort = 1883;
 const brokerUsername = 'innovation';
@@ -33,21 +31,26 @@ const brokerPassword = 'Innovation_RgPQAZoA5N';
 const topic = '/innovation/airmonitoring/WSNs';
 const CLIENT_ID = 'innovation';
 const CLEAN_SESSION = true;
+const KEEP_ALIVE_INTERVAL = 60;
 
 const client = mqtt.connect(brokerUrl, {
-    host: brokerUrl,
     port: brokerPort,
     username: brokerUsername,
     password: brokerPassword,
     clientId: CLIENT_ID,
     clean: CLEAN_SESSION,
+    keepalive: KEEP_ALIVE_INTERVAL, // Thêm keep-alive
+    reconnectPeriod: 1000, // Tự động kết nối lại sau 1 giây nếu mất kết nối
+    connectTimeout: 30 * 1000, // Thời gian chờ kết nối là 30 giây
 });
 
-client.on('connect', function () {
-    console.log('Connected to MQTT broker');
-    client.subscribe(topic, function (err) {
-        if (!err) {
-            console.log('Subscribed to', topic);
+client.on('connect', () => {
+    console.log('Connected to broker');
+    client.subscribe(topic, (err) => {
+        if (err) {
+            console.error('Failed to subscribe:', err);
+        } else {
+            console.log(`Subscribed to ${topic}`);
         }
     });
 });
@@ -191,7 +194,7 @@ app.get('/api/air_0001', (req, res) => {
             res.status(500).json({ error: 'Lỗi truy vấn cơ sở dữ liệu' });
         } else {
             const resultWithVietnamTime = result.map(record => {
-                record.sensors_datetime = moment1(record.sensors_datetime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DDTHH:mm:ss.SSS');
+                record.sensors_datetime = moment(record.sensors_datetime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DDTHH:mm:ss.SSS');
                 return record;
             });
 
@@ -425,55 +428,45 @@ app.get('/api/solar-air/bieudonangluongvadoamTK', async (req, res) => {
     let month = req.query.month || new Date().getMonth() + 1;
     let day = req.query.day || new Date().getDate();
 
-    let dateCondition;
-    if (day) {
-        dateCondition = `DAY(sensors_datetime) = "${day}"`;
+    let dateCondition = '';
+    if (year && month && day) {
+        dateCondition = `YEAR(sensors_datetime) = "${year}" AND MONTH(sensors_datetime) = "${month}" AND DAY(sensors_datetime) = "${day}"`;
+    } else if (year && month) {
+        dateCondition = `YEAR(sensors_datetime) = "${year}" AND MONTH(sensors_datetime) = "${month}"`;
     } else {
-        dateCondition = `MONTH(sensors_datetime) = "${month}"`;
+        return res.status(400).json({ error: 'Thiếu tham số ngày/tháng/năm' });
     }
 
     const sql1 = `
-        SELECT *
-        FROM (
-            SELECT
-                DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') AS date,
-                ROUND(AVG(sensors_value), 0) AS average_1
-            FROM
-                sensors
-            WHERE
-                LOWER(sensors_name) = 'humi_0001'
-                AND ${dateCondition}
-                AND YEAR(sensors_datetime) = "${year}"
-            GROUP BY
-                DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s'), sensors_datetime
-            ORDER BY
-                sensors_datetime DESC
-            LIMIT 12
-        ) AS subquery
+        SELECT
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') AS date,
+            ROUND(AVG(sensors_value), 0) AS average_1
+        FROM
+            sensors
+        WHERE
+            LOWER(sensors_name) = 'humi_0001'
+            AND ${dateCondition}
+        GROUP BY
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s')
         ORDER BY
-            date ASC;    
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') DESC
+        LIMIT 12;
     `;
 
     const sql2 = `
-        SELECT *
-        FROM (
-            SELECT
-                DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') AS date,
-                ROUND(AVG(sensors_value * 100), 0) AS average_2
-            FROM
-                sensors
-            WHERE
-                LOWER(sensors_name) = 'power_0001'
-                AND ${dateCondition}
-                AND YEAR(sensors_datetime) = "${year}"
-            GROUP BY
-                DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s'), sensors_datetime
-            ORDER BY
-                sensors_datetime DESC
-            LIMIT 12
-        ) AS subquery
+        SELECT
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') AS date,
+            ROUND(AVG(sensors_value * 100), 0) AS average_2
+        FROM
+            sensors
+        WHERE
+            LOWER(sensors_name) = 'power_0001'
+            AND ${dateCondition}
+        GROUP BY
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s')
         ORDER BY
-            date ASC;    
+            DATE_FORMAT(sensors_datetime, '%Y-%m-%d %H:%i:%s') DESC
+        LIMIT 12;
     `;
 
     try {
@@ -481,6 +474,11 @@ app.get('/api/solar-air/bieudonangluongvadoamTK', async (req, res) => {
             new Promise((resolve, reject) => db.query(sql1, (err, result) => err ? reject(err) : resolve(result))),
             new Promise((resolve, reject) => db.query(sql2, (err, result) => err ? reject(err) : resolve(result)))
         ]);
+
+        // Kiểm tra xem kết quả trả về có dữ liệu không
+        if (results1.length === 0 || results2.length === 0) {
+            return res.json([]);
+        }
 
         const combinedResults = results1.map((tempRow, index) => ({
             date: tempRow.date,
@@ -639,13 +637,15 @@ const sql2 = `
 app.get('/api/solar-air/bieudotiengonvakhongkhiTop10', async (req, res) => {
     let year = req.query.year || new Date().getFullYear();
     let month = req.query.month || new Date().getMonth() + 1;
-    let day = req.query.day || null; // Khởi tạo day là null
+    let day = req.query.day || null;
 
-    let dateCondition;
+    let dateCondition = '';
     if (day) {
-        dateCondition = `DAY(sensors_datetime) = "${day}"`;
+        // Nếu có nhập ngày, sử dụng ngày, tháng và năm
+        dateCondition = `YEAR(sensors_datetime) = "${year}" AND MONTH(sensors_datetime) = "${month}" AND DAY(sensors_datetime) = "${day}"`;
     } else {
-        dateCondition = `MONTH(sensors_datetime) = "${month}"`;
+        // Nếu chỉ nhập tháng, sử dụng chỉ tháng và năm
+        dateCondition = `YEAR(sensors_datetime) = "${year}" AND MONTH(sensors_datetime) = "${month}"`;
     }
 
     const sql1 = `
@@ -710,6 +710,7 @@ app.get('/api/solar-air/bieudotiengonvakhongkhiTop10', async (req, res) => {
         res.status(500).json({ error: 'Lỗi truy vấn cơ sở dữ liệu' });
     }
 });
+
 
 
 //Thoogs kê theo khoảng ngày mà người dùng nhập vào thống kê tiếng ồn và không khí 

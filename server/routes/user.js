@@ -5,7 +5,7 @@ const middlewareController = require('../controllers/middlewareController');
 
 router.get('/', middlewareController.authenticateToken, userController.getAllUser);
 router.put('/', userController.updateUser);
-router.delete('/', userController.deleteUser);
+router.delete('/', middlewareController.authenticateToken, userController.deleteUser);
 
 
 module.exports = router;
